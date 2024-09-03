@@ -1,0 +1,1000 @@
+---
+title: "CAMDA2024 - Microbiom"
+subtitle: "002_Gut"
+author: "David Alberto García Estrada"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+We adjust the working area
+
+```{r}
+# Set seed
+set.seed(1992)
+
+# Display current directory
+getwd()
+# If necessary, change the path where the stored files are located. 
+workingDir <- "."
+setwd(workingDir)
+
+# Type data
+data <- "Gut"
+
+# Directories
+D.dir <- paste0(Data, data, "/")
+R.dir <- paste0(Results, data, "/")
+```
+
+# Data
+
+Import data
+
+```{r}
+# List files
+list.files(D.dir)
+
+# Metadata
+Meta <- read.table(paste0(D.dir, "metadata.txt"), header = TRUE)
+rownames(Meta) <- Meta$SampleID
+Meta$Diagnosis <- as.factor(Meta$Diagnosis)
+Meta$Project <- as.factor(Meta$Project)
+
+# Pathways
+Path <- read.csv(paste0(D.dir, "pathways.csv"), row.names = 1, header = TRUE)
+
+# Taxonomy
+Taxo <- read.table(paste0(D.dir, "taxonomy.txt"), row.names = 1, header = TRUE)
+
+# Round
+TaxoR <- round(Taxo*100, 0)
+```
+
+# Phyloseq
+
+We make object phyloseq
+
+```{r}
+# OTU table
+OTU <- otu_table(as.matrix(TaxoR), taxa_are_rows = TRUE)
+
+# SAM table
+SAM <- sample_data(Meta)
+
+# Phyloseq object
+physeq <- merge_phyloseq(phyloseq(OTU), SAM)
+```
+
+# Results
+
+## Abundance
+
+Abundance top
+
+```{r}
+# Define the number top taxa
+ntop <- 10
+
+# Select the top taxa based on their abundance sums
+top <- sort(taxa_sums(physeq), T)[1:ntop]
+
+# Filter the phyloseq object to include only the top taxa
+top <- prune_taxa(names(top), physeq)
+
+# Convert to dataframe
+topDF <- psmelt(top)
+
+# Add a "species" column that is equal to OTU
+topDF$Species <- topDF$OTU
+
+# Plot 
+topplot <- ggplot(data = topDF, aes(x = Diagnosis, y = Abundance, fill = Species)) +
+    geom_bar(stat = "identity", position = "stack") + #position = "fill") + 
+    # Scale
+    labs(title = "Absolute abundance", x = "Diagnosis", 
+         y = "Absolute abundance", fill = "Species") +
+    # Theme
+    theme_classic()
+topplot
+
+ggsave(filename = paste0(R.dir, "Abundance/", data, "-AbsAbun-Top10.svg"), 
+       plot = topplot, width = 10, height = 10, units = "in")
+```
+
+## Diversity
+
+Alpha
+
+```{r}
+# Alpha diversity measures
+measures <- c("Observed", "Chao1", "Shannon", "Simpson")
+
+# Plot
+alpha <- plot_richness(physeq = physeq, measures = measures,
+                       color = "Diagnosis", x = "Diagnosis", 
+                       title = "Alpha Diversity Indices") +
+  labs(x = "Diagnosis", y = "Alpha Diversity Measures") +
+  theme_classic() +
+  geom_boxplot(aes(fill = Diagnosis), alpha = 0.7) + 
+  scale_color_brewer(palette = "Set1") + 
+  scale_fill_brewer(palette = "Set1")
+alpha
+
+ggsave(filename = paste0(R.dir, "Diversity/", data, "-AlphaDiversity.svg"), 
+       plot = alpha, width = 15, height = 10, units = "in")
+```
+
+Beta
+
+```{r}
+Ord <- ordinate(physeq = physeq, method = "PCoA", distance = "bray")
+beta <- plot_ordination(physeq = physeq, ordination = Ord, color = "Diagnosis") +
+    theme_classic() +
+    geom_point(size = 3) +
+    stat_ellipse(aes(group = Diagnosis, linetype = Diagnosis), type = "t", size = 0.75) +
+    #geom_text(mapping = aes(label = Diagnosis), size = 4, vjust = 2, hjust = 1) + 
+    geom_vline(xintercept = 0) +
+    geom_hline(yintercept = 0) +
+    labs(title = "Beta diversity (PCoA Bray-Curtis)") +
+    scale_color_brewer(palette = "Set1") + 
+    scale_fill_brewer(palette = "Set1")
+beta
+```
+
+Escalamiento
+
+```{r}
+# Percentage
+p.physeq <- transform_sample_counts(physeq = physeq, fun = function(x) x/sum(x))
+p.Ord <- ordinate(physeq = p.physeq, method = "PCoA", distance = "bray")
+plot_ordination(physeq = p.physeq, ordination = p.Ord, color = "Diagnosis") +
+  stat_ellipse(aes(group = Diagnosis, linetype = Diagnosis), type = "t", size = 0.75) +
+  theme_classic()
+# Log
+l.physeq <- transform_sample_counts(physeq = physeq, fun = function(x) log(x+1))
+l.Ord <- ordinate(physeq = l.physeq, method = "PCoA", distance = "bray")
+plot_ordination(physeq = l.physeq, ordination = l.Ord, color = "Diagnosis") +
+  stat_ellipse(aes(group = Diagnosis, linetype = Diagnosis), type = "t", size = 0.75) +
+  theme_classic()
+# Square root
+s.physeq <- transform_sample_counts(physeq = physeq, fun = function(x) sqrt(x))
+s.Ord <- ordinate(physeq = s.physeq, method = "PCoA", distance = "bray")
+plot_ordination(physeq = s.physeq, ordination = s.Ord, color = "Diagnosis")+
+  stat_ellipse(aes(group = Diagnosis, linetype = Diagnosis), type = "t", size = 0.75) +
+  theme_classic()
+```
+
+## Differential Taxa
+
+### Edge R
+
+```{r}
+OTU <- physeq@otu_table@.Data
+SAM <- as.data.frame(physeq@sam_data[,c("Diagnosis", "SampleID")])
+SAM <- SAM[order(SAM$SampleID), ]
+col.names <- colnames(OTU)
+new.col.names <- as.character(SAM$Diagnosis[match(col.names, SAM$SampleID)])
+colnames(OTU) <- ifelse(is.na(new.col.names), col.names, new.col.names)
+
+counts <- as.data.frame(OTU)
+Original <- dim(counts)
+counts <- counts[rowSums(cpm(counts) >= 3) >= 1, ] 
+Filtering <- dim(counts) 
+print(paste("The percentage remaining after filtering is",
+            round(Filtering[1]/Original[1]*100, 2))) 
+```
+
+Declare the variable where the DGEList object is stored
+
+```{r}
+grp <- new.col.names
+```
+
+We generate the DGEList object
+
+```{r}
+dge <- DGEList(counts = counts, group = grp)
+```
+
+Calculate a normalization factor.
+
+```{r}
+dge <- calcNormFactors(dge)
+```
+
+Estimate the dispersion
+
+```{r}
+dge <- estimateCommonDisp(dge)
+```
+
+GLMTagwise dispersion for multifactor experiments
+
+````{r, results="hide"}
+dge <- estimateGLMTagwiseDisp(dge)
+```
+
+We plot the dispersion of the total libraries, after the GMLTagwise analysis.
+
+```{r}
+plotBCV(dge)
+# The lower the dispersion value the better since we expect them to be not 
+# too sparse, i.e., the more clustered the better.
+```
+
+Matrix design
+
+```{r}
+design <- model.matrix(~ 0 + group, data = dge$samples) 
+colnames(design) <- levels(dge$samples$group)
+```
+
+Comparisons by designing a vector of contrasts.
+
+```{r}
+fit <- glmQLFit(dge, design)
+my.contrasts = makeContrasts(CDvsHE = CD - Healthy,
+                             OBvsHE = Obese - Healthy,
+                             UCvsHE = UC - Healthy,
+                             levels = design)
+```
+
+DT Analysis
+
+```{r}
+# We declare the variables for each contrast
+contrasts <- colnames(my.contrasts)
+
+# In the for loop we will enter different values of FDRs
+FDRs <- c(0.05, 0.005)
+
+DTsE <- paste0(R.dir, "DifferentialTaxa/EdgeR/")
+dir.create(DTsE, showWarnings = FALSE)
+
+# Cycle for
+for (contrast in contrasts){
+  tryCatch({
+    # Comparison
+    # contrast <- "CDvsHE"
+    # Genewise Negative Binomial
+    qlf <- glmQLFTest(fit, contrast = my.contrasts[,contrast]) 
+    
+    # Table of the Top Differentially Expressed Taxones
+    topTags(qlf)
+    tabtop <- topTags(qlf, n = Inf)$table
+    
+    # DT
+    for (fdr in FDRs){
+      tryCatch({
+        # fdr <- 0.05
+        # Directories
+        DTs.FDR <- paste0(DTsE, "FDR_", fdr, "/")
+        dir.create(DTs.FDR, showWarnings = FALSE)
+        DTs.FDR.T <- paste0(DTs.FDR, "Tablas/")
+        dir.create(DTs.FDR.T, showWarnings = FALSE)
+        DTs.FDR.P <- paste0(DTs.FDR, "Plots/")
+        dir.create(DTs.FDR.P, showWarnings = FALSE)
+        
+        # DT.Taxones
+        taxones <- rownames(tabtop)[tabtop$FDR <= fdr]
+        length(taxones)
+        
+        # Save table DTs
+        name <- paste0("DT-", contrast, "-FDR_", fdr) 
+        write.table(tabtop[taxones,], file = paste0(DTs.FDR.T, name, ".txt"), 
+                    row.names = TRUE, col.names = NA, quote = FALSE, sep = "\t")
+        
+        # Plots DTs
+        plotV <- EnhancedVolcano(tabtop[tabtop$FDR <= fdr,], colAlpha = 1,
+                                 title = paste0("Volcano plot of ", name),
+                                 lab = taxones, x = "logFC", y = "PValue",
+                                 gridlines.major = FALSE, gridlines.minor = FALSE)
+        
+        # Save plot
+        ggsave(filename = paste0(DTs.FDR.P, name, "_Volcano.svg"), plot = plotV, 
+               device = "svg", width = 15, height = 15, units = "in")
+        
+        # Separate up and down taxones
+        updown <- read.table(paste0(DTs.FDR.T, name, ".txt"), header = TRUE, 
+                        row.names = 1, sep = "\t", comment.char = "")
+        write.table(updown[updown$logFC <= 0,], 
+                    file = paste0(DTs.FDR.T, "down.", name, ".txt"), 
+                    row.names = TRUE, col.names = NA, quote = FALSE, sep = "\t")
+        write.table(updown[updown$logFC >= 0,], 
+                    file = paste0(DTs.FDR.T, "up.", name, ".txt"), 
+                    row.names = TRUE, col.names = NA, quote = FALSE, sep = "\t")
+        
+        # Applying a logFC > 1
+        # Directories
+        DTs.FDR.Log <- paste0(DTsE, "FDR_", fdr, "_logFC/")
+        dir.create(DTs.FDR.Log, showWarnings = FALSE)
+        DTs.FDR.Log.T <- paste0(DTs.FDR.Log, "Tablas/")
+        dir.create(DTs.FDR.Log.T, showWarnings = FALSE)
+        DTs.FDR.Log.P <- paste0(DTs.FDR.Log, "Plots/")
+        dir.create(DTs.FDR.Log.P, showWarnings = FALSE)
+        
+        # DT.Taxones
+        taxon<- rownames(tabtop)[tabtop$FDR <= fdr & abs(tabtop$logFC) >= 1] # de Taxones
+        length(taxon)
+        
+        # Save table DTs
+        name <- paste0("DT-", contrast, "-FDR_", fdr, "_logFC") # DTs
+        write.table(tabtop[taxon,], file = paste0(DTs.FDR.Log.T, name, ".txt"), 
+                    row.names = TRUE, col.names = NA, quote = FALSE, sep = "\t")
+        
+        # Plots DTs
+        plotV <- EnhancedVolcano(tabtop[tabtop$FDR <= fdr & abs(tabtop$logFC) >= 1,], 
+                                 title = paste0("Volcano plot of ", name),
+                                 lab = taxon, x = "logFC", y = "PValue", colAlpha = 1,
+                                 gridlines.major = FALSE, gridlines.minor = FALSE)
+        
+        # Save plot
+        ggsave(filename = paste0(DTs.FDR.Log.P, name, "_Volcano.svg"), plot = plotV, 
+               device = "svg", width = 15, height = 15, units = "in")
+
+        # Separate up and down taxones
+        updown <- read.table(paste0(DTs.FDR.Log.T, name, ".txt"), 
+                             header = TRUE, row.names = 1, sep = "\t", comment.char="")
+        write.table(updown[updown$logFC <= 0,], 
+                    file = paste0(DTs.FDR.Log.T, "down.", name, ".txt"), 
+                    row.names = TRUE, col.names = NA, quote = FALSE, sep = "\t")
+        write.table(updown[updown$logFC >= 0,], 
+                    file = paste0(DTs.FDR.Log.T, "up.", name, ".txt"), 
+                    row.names = TRUE, col.names = NA, quote = FALSE, sep = "\t")
+      }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+    }
+  }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+}
+```
+
+DT Matrix for each condition
+
+```{r}
+conditions <- c("FDR_0.05", "FDR_0.05_logFC",
+                "FDR_0.005", "FDR_0.005_logFC")
+
+for (fdr in conditions){
+  list <- list()
+  id <- c()
+  # fdr <- "FDR_0.05"
+  
+  # Tables of FDRs only
+  DTs.FDR <- paste0(DTsE, fdr, "/")
+  DTs.FDR.T <- paste0(DTs.FDR, "Tablas/")
+  
+  # Each of the filenames with the FDR_ pattern is stored
+  countFiles <- list.files(path = DTs.FDR.T, 
+                           pattern = paste0(fdr, ".txt"))
+  
+  for (count in countFiles) {
+    # count <- "DT-IPT7vsWT7-FDR_0.050.txt"
+    tab <- read.table(file = paste0(DTs.FDR.T, count), 
+                      header = TRUE, sep="\t", quote= "", 
+                      row.names=1, comment.char="")
+    list[[count]] <- tab
+    id <- unique(c(id, rownames(tab)))
+  }
+  
+  for (type in c("logFC", "logCPM", "PValue", "FDR")){
+    # type <- "logFC"
+    table <- data.frame(row.names = id)
+    for (treat in names(list)) {
+      temptable <- list[[treat]]
+      table[rownames(temptable), treat] <- temptable[, type]
+      # print(paste("The sample", treat, "was successfully added"))
+    }
+    
+    table[is.na(table)] = 0
+    colnames(table) <- gsub(".txt", "", colnames(table))
+    
+    write.table(table, file = paste0(DTs.FDR, "Table-", type, "_DTs-", fdr, ".txt"), 
+                row.names = TRUE, col.names = NA, quote = FALSE, sep = "\t")
+  }
+}
+```
+
+## Venn Diagram for DTs
+
+We will perform the analysis for all conditions
+
+```{r, warning = FALSE}
+# No create file .log
+futile.logger::flog.threshold(futile.logger::ERROR, name = "VennDiagramLogger")
+
+# directory
+VennE <- paste0(R.dir, "VennDiagramTaxa/")
+
+# Combination contrasts
+comb.contrats <- t(combn(contrasts, 2))
+
+for (condition in conditions){
+    # condition <- "FDR_0.05"
+    # Directories
+    Venn.FDR <- paste0(VennE, condition,"/") 
+    dir.create(Venn.FDR, showWarnings = FALSE)
+    VennPlot <- paste0(Venn.FDR, "Plots/") 
+    dir.create(VennPlot, showWarnings = FALSE)
+    VennList <- paste0(Venn.FDR, "Lista/") 
+    dir.create(VennList, showWarnings = FALSE)
+    
+    # Each file name is stored with the pattern "FDR_0.050.txt"
+    countFiles <- list.files(path = paste0(DTsE, condition, "/Tablas/"),
+                             pattern = paste0(condition, ".txt"))
+    
+    # We make a list of taxones of each contrast in the given condition
+    list_Venn <- list()
+    for (count in countFiles){
+        # count <- "DT-OBvsHe-FDR_0.05.txt"
+        name <- sub(paste0("-", condition, ".txt"), "", count)
+        data <- read.table(paste0(DTsE, condition, "/Tablas/", count), 
+                           header = TRUE, sep = "\t", quote = "", 
+                           row.names = 1, comment.char = "")
+        list_Venn[[name]] <- data
+    }
+    
+    # We analyze the various possible combinations of 2 element
+    for (i in 1:nrow(comb.contrats)){
+        # i <- 3
+        repA <- comb.contrats[i,][1]
+        repB <- comb.contrats[i,][2]
+        
+        for (ud in c("", "up.", "down.")){
+            # ud <- ""
+            vennlist <- list(repA = rownames(list_Venn[[paste0(ud, "DT-", repA)]]),
+                             repB = rownames(list_Venn[[paste0(ud, "DT-", repB)]]))
+            names(vennlist) <- c(paste0(ud, repA), paste0(ud, repB))
+            
+            if (length(vennlist[[1]]) != 0 && length(vennlist[[2]]) != 0){
+                # Venn object
+                ventemp <- venn(vennlist, show.plot = FALSE)
+                ventemp <- attributes(ventemp)$intersections
+                ventemp <- t(do.call(rbind, ventemp))
+                
+                # Verifies whether or not intersection exists
+                if (sum(table(unique(ventemp[,3]))) > 0 && dim(ventemp)[2] == 3){
+                    tryCatch({
+                        # Graphs
+                        venn.diagram(x = vennlist, 
+                                     # Names
+                                     category.names = names(vennlist), 
+                                     main = "Venn Diagram", main.cex = 20,
+                                     main.fontfamily = "sans",
+                                     sub = paste0(ud, repA, " vs ", ud, repB), 
+                                     sub.cex = 15, sub.fontfamily = "sans",
+                                     # Output
+                                     filename = paste0(VennPlot, ud, "DT_", 
+                                                       repA, "-vs-", repB, ".svg"), 
+                                     output = FALSE, 
+                                     # Output features
+                                     imagetype = "svg", height = 100, 
+                                     width = 100, resolution = 300,
+                                     # Circles
+                                     lwd = 15, 
+                                     col = c("#440154ff", "#21908dff"),
+                                     fill = c(alpha("#440154ff",0.3),
+                                              alpha("#21908dff",0.3)),
+                                     # Numbers
+                                     cex = 15, fontfamily = "sans",
+                                     # Set names
+                                     cat.pos = c(315, 45), 
+                                     cat.dist = c(0.05, 0.05), 
+                                     cat.cex = 15, 
+                                     cat.default.pos = "outer", 
+                                     cat.fontfamily = "sans")
+                      
+                        # Save table with all
+                        write.table(ventemp, file = paste0(VennList, "ListVenn-", 
+                                                           ud, "DT_", repA, "-vs-", 
+                                                           repB, ".txt"),
+                                    row.names = FALSE, quote = FALSE, 
+                                    sep = "\t", col.names = TRUE)
+                        
+                        # Cycle to save tables
+                        for (col in 1:length(colnames(ventemp))) {
+                            # Crea el dataframe
+                            df <- data.frame(unique(ventemp[, col]))
+                            names(df) <- colnames(ventemp)[col]
+                            names(df) <- gsub(":", "&", names(df))
+                            
+                            # Guarda el dataframe
+                            write.table(df, file = paste0(VennList, "ListVenn-", 
+                                                          ud, "DT_", repA, "-vs-", 
+                                                          repB, "_only_", 
+                                                          names(df), ".txt"),
+                                        row.names = FALSE, quote = FALSE, 
+                                        sep = "\t", col.names = TRUE)
+                        }
+                    }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+                }
+            }
+        }
+    }
+    
+    # Venn of 3 contrast join
+    for (ud in c("", "up.", "down.")){
+        # ud <- "up."
+        x <- contrasts[1]
+        y <- contrasts[2]
+        z <- contrasts[3]
+        
+        vennlist <- list(x = rownames(list_Venn[[paste0(ud, "DT-", x)]]),
+                         y = rownames(list_Venn[[paste0(ud, "DT-", y)]]),
+                         z = rownames(list_Venn[[paste0(ud, "DT-", z)]]))
+        
+        names(vennlist) <- c(paste0(ud, x), paste0(ud, y), paste0(ud, z))
+        
+        if (length(vennlist[[1]]) != 0 && length(vennlist[[2]]) != 0 && length(vennlist[[3]]) != 0 ){
+            ventemp <- venn(vennlist, show.plot = FALSE)
+            ventemp <- attributes(ventemp)$intersections
+            ventemp <- t(do.call(rbind, ventemp))
+            
+            if (sum(table(unique(ventemp[,7]))) > 0 && dim(ventemp)[2] == 7){
+                tryCatch({
+                    venn.diagram(x = vennlist, 
+                                 # Names
+                                 category.names = names(vennlist), 
+                                 main = "Venn Diagram", main.cex = 20, 
+                                 sub = paste0(ud, x, " vs ", ud, y, " vs ", ud, z), 
+                                 sub.cex = 15, main.fontfamily = "sans", 
+                                 sub.fontfamily = "sans",
+                                 # Output
+                                 filename = paste0(VennPlot, ud, "DT_", x, 
+                                                   "-vs-", y, "-vs-", z, ".svg"), 
+                                 output = FALSE, 
+                                 # Output features
+                                 imagetype = "svg", height = 100, 
+                                 width = 100, resolution = 300,
+                                 # Circles
+                                 lwd = 15, 
+                                 col = c("#440154ff", "#21908dff", "#fde725ff"),
+                                 fill = c(alpha("#440154ff",0.3), 
+                                          alpha("#21908dff",0.3), 
+                                          alpha("#fde725ff",0.3)),
+                                 # Numbers
+                                 cex = 15, fontfamily = "sans",
+                                 # Set names
+                                 cat.pos = c(-27, 27, 135), 
+                                 cat.dist = c(0.05, 0.05, 0.05), 
+                                 cat.cex = 15, 
+                                 cat.default.pos = "outer", 
+                                 cat.fontfamily = "sans")
+                  
+                    # Save table with all
+                    write.table(ventemp, file = paste0(VennList, "ListVenn-",
+                                                       ud, "DT_", x, "-vs-", y, 
+                                                       "-vs-", z, ".txt"),
+                                row.names = FALSE, quote = FALSE, 
+                                sep = "\t", col.names = TRUE)
+                    
+                    # Cycle to save tables
+                    for (col in 1:length(colnames(ventemp))) {
+                        # Crea el dataframe
+                        df <- data.frame(unique(ventemp[, col]))
+                        names(df) <- colnames(ventemp)[col]
+                        names(df) <- gsub(":", "&", names(df))
+                        # Guarda el dataframe
+                        write.table(df, file = paste0(VennList, "ListVenn-", 
+                                                      ud, "DT_", x, "-vs-", 
+                                                      y, "-vs-", z, "_only_", 
+                                                      names(df), ".txt"),
+                                    row.names = FALSE, quote = FALSE, 
+                                    sep = "\t", col.names = TRUE)
+                    }
+                }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+            }
+        }
+    }
+}
+```
+
+## Differential Function Pathways
+
+```{r}
+pathway <- Path*1000000000
+col.names <- colnames(pathway)
+new.col.names <- as.character(SAM$Diagnosis[match(col.names, SAM$SampleID)])
+colnames(pathway) <- ifelse(is.na(new.col.names), col.names, new.col.names)
+
+countsF <- pathway
+Original <- dim(countsF) 
+countsF <- countsF[rowSums(cpm(countsF) >= 1) >= 1, ] 
+Filtering <- dim(countsF) 
+print(paste("The percentage remaining after filtering is",
+            round(Filtering[1]/Original[1]*100, 2))) 
+```
+
+Declare the variable where the DGEList object is stored
+
+```{r}
+grpF <- new.col.names
+```
+
+DGEList object
+
+```{r}
+dgeF <- DGEList(counts = countsF, group = grpF)
+```
+
+Calculate a normalization factor.
+
+```{r}
+dgeF <- calcNormFactors(dgeF)
+```
+
+Estimate the dispersion
+
+```{r}
+dgeF <- estimateCommonDisp(dgeF)
+```
+
+GLMTagwise dispersion for multifactor experiments
+
+````{r, results="hide"}
+dgeF <- estimateGLMTagwiseDisp(dgeF)
+```
+
+Matrix design
+
+```{r}
+designF <- model.matrix(~ 0 + group, data = dgeF$samples) 
+colnames(designF) <- levels(dgeF$samples$group)
+```
+
+Make comparisons 
+
+```{r}
+fitF <- glmQLFit(dgeF, designF)
+# Subtraction is always "Treatment - Control".
+my.contrasts = makeContrasts(CDvsHE = CD - Healthy,
+                             OBvsHE = Obese - Healthy,
+                             UCvsHE = UC - Healthy,
+                             levels = designF)
+```
+
+Differential Function Analysis
+
+```{r}
+# We declare the variables for each contrast
+contrasts <- colnames(my.contrasts)
+
+# In the for loop we will enter different values of FDRs
+FDRs <- c(0.05, 0.005)
+
+DFun.P <- paste0(R.dir, "DifferentialFunction/")
+
+# Cycle for
+for (contrast in contrasts){
+  tryCatch({
+    # Comparison
+    # contrast <- "CDvsHE"
+    
+    # Genewise Negative Binomial
+    qlf <- glmQLFTest(fitF, contrast = my.contrasts[,contrast]) 
+    
+    # Table of the Top Differentially Expressed Taxones
+    topTags(qlf)
+    tabtop <- topTags(qlf, n = Inf)$table
+    
+    # DF
+    for (fdr in FDRs){
+      tryCatch({
+        # fdr <- 0.05
+        # Directories
+        DFun.FDR <- paste0(DFun.P, "FDR_", fdr, "/")
+        dir.create(DFun.FDR, showWarnings = FALSE)
+        DFun.FDR.T <- paste0(DFun.FDR, "Tablas/")
+        dir.create(DFun.FDR.T, showWarnings = FALSE)
+        DFun.FDR.P <- paste0(DFun.FDR, "Plots/")
+        dir.create(DFun.FDR.P, showWarnings = FALSE)
+        
+        # DF.Taxones
+        taxones <- rownames(tabtop)[tabtop$FDR <= fdr]
+        length(taxones)
+        df.functions <- tabtop[taxones,] %>% drop_na()
+        
+        # Save table DFun
+        name <- paste0("DF-", contrast, "-FDR_", fdr) 
+        write.table(df.functions, file = paste0(DFun.FDR.T, name, ".txt"), 
+                    row.names = TRUE, col.names = NA, quote = FALSE, sep = "\t")
+        
+        # Plots DFun
+        plotV <- EnhancedVolcano(df.functions, colAlpha = 1,
+                                 title = paste0("Volcano plot of ", name),
+                                 lab = taxones, x = "logFC", y = "PValue",
+                                 gridlines.major = FALSE, gridlines.minor = FALSE)
+        
+        # Save plot
+        ggsave(filename = paste0(DFun.FDR.P, name, "_Volcano.svg"), plot = plotV, 
+               device = "svg", width = 15, height = 15, units = "in")
+        
+        # Separate up and down taxones
+        df.fun.down <- df.functions[df.functions$logFC <= 0,] %>% drop_na()
+        write.table(df.fun.down, file = paste0(DFun.FDR.T, "down.", name, ".txt"), 
+                    row.names = TRUE, col.names = NA, quote = FALSE, sep = "\t")
+        df.fun.up <- df.functions[df.functions$logFC >= 0,] %>% drop_na()
+        write.table(df.fun.up, file = paste0(DFun.FDR.T, "up.", name, ".txt"), 
+                    row.names = TRUE, col.names = NA, quote = FALSE, sep = "\t")
+        
+        # Applying a logFC > 1
+        # Directories
+        DFun.FDR.Log <- paste0(DFun.P, "FDR_", fdr, "_logFC/")
+        dir.create(DFun.FDR.Log, showWarnings = FALSE)
+        DFun.FDR.Log.T <- paste0(DFun.FDR.Log, "Tablas/")
+        dir.create(DFun.FDR.Log.T, showWarnings = FALSE)
+        DFun.FDR.Log.P <- paste0(DFun.FDR.Log, "Plots/")
+        dir.create(DFun.FDR.Log.P, showWarnings = FALSE)
+        
+        # DF.Taxones
+        taxon <- rownames(tabtop)[tabtop$FDR <= fdr & abs(tabtop$logFC) >= 1] # de Taxones
+        length(taxon)
+        df.functions <- tabtop[taxon,] %>% drop_na()
+        
+        # Save table DFun
+        name <- paste0("DF-", contrast, "-FDR_", fdr, "_logFC") # DFun
+        write.table(df.functions, file = paste0(DFun.FDR.Log.T, name, ".txt"), 
+                    row.names = TRUE, col.names = NA, quote = FALSE, sep = "\t")
+        
+        # Plots DFun
+        plotV <- EnhancedVolcano(df.functions, 
+                        lab = taxon, x = "logFC", y = "PValue", colAlpha = 1,
+                        title = paste0("Volcano plot of ", name),
+                        gridlines.major = FALSE, gridlines.minor = FALSE)
+        
+        # Save plot
+        ggsave(filename = paste0(DFun.FDR.Log.P, name, "_Volcano.svg"), plot = plotV, 
+               device = "svg", width = 15, height = 15, units = "in")
+        
+        # Separate up and down taxones
+        df.fun.down <- df.functions[df.functions$logFC <= 0,] %>% drop_na()
+        write.table(df.fun.down, file = paste0(DFun.FDR.Log.T, "down.", name, ".txt"), 
+                    row.names = TRUE, col.names = NA, quote = FALSE, sep = "\t")
+        df.fun.up <- df.functions[df.functions$logFC >= 0,] %>% drop_na()
+        write.table(df.fun.up, file = paste0(DFun.FDR.Log.T, "up.", name, ".txt"), 
+                    row.names = TRUE, col.names = NA, quote = FALSE, sep = "\t")
+      }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+    }
+  }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+}
+```
+
+DF Matrix for each condition
+
+```{r}
+conditions <- c("FDR_0.05", "FDR_0.05_logFC",
+                "FDR_0.005", "FDR_0.005_logFC")
+
+for (fdr in conditions){
+  list <- list()
+  id <- c()
+  # fdr <- "FDR_0.05"
+  
+  # Tables of FDRs only
+  DFun.FDR <- paste0(DFun.P, fdr, "/")
+  DFun.FDR.T <- paste0(DFun.FDR, "Tablas/")
+  
+  # Each of the filenames with the FDR_ pattern is stored
+  countFiles <- list.files(path = DFun.FDR.T, 
+                           pattern = paste0(fdr, ".txt"))
+  
+  for (count in countFiles) {
+    # count <- "DF-IPT7vsWT7-FDR_0.050.txt"
+    tab <- read.table(file = paste0(DFun.FDR.T, count), 
+                      header = TRUE, sep="\t", quote= "", 
+                      row.names=1, comment.char="")
+    list[[count]] <- tab
+    id <- unique(c(id, rownames(tab)))
+  }
+  
+  for (type in c("logFC", "logCPM", "PValue", "FDR")){
+    # type <- "logFC"
+    table <- data.frame(row.names = id)
+    for (treat in names(list)) {
+      temptable <- list[[treat]]
+      table[rownames(temptable), treat] <- temptable[, type]
+      # print(paste("The sample", treat, "was successfully added"))
+    }
+    
+    table[is.na(table)] = 0
+    colnames(table) <- gsub(".txt", "", colnames(table))
+    write.table(table, file = paste0(DFun.FDR, "Table-", type, "_DFun-", fdr, ".txt"), 
+                row.names = TRUE, col.names = NA, quote = FALSE, sep = "\t")
+  }
+}
+```  
+
+## Venn Diagram Functions
+
+```{r, warning = FALSE}
+# No create file .log
+futile.logger::flog.threshold(futile.logger::ERROR, name = "VennDiagramLogger")
+
+# Directory
+VennE <- paste0(R.dir, "VennDiagramFunction/")
+
+# Combination contrasts
+comb.contrats <- t(combn(contrasts, 2))
+
+for (condition in conditions){
+    # condition <- "FDR_0.05"
+    # Directories
+    Venn.FDR <- paste0(VennE, condition,"/") 
+    dir.create(Venn.FDR, showWarnings = FALSE)
+    VennPlot <- paste0(Venn.FDR, "Plots/") 
+    dir.create(VennPlot, showWarnings = FALSE)
+    VennList <- paste0(Venn.FDR, "Lista/") 
+    dir.create(VennList, showWarnings = FALSE)
+    
+    # Each file name is stored with the pattern "FDR_0.050.txt"
+    countFiles <- list.files(path = paste0(DFun.P, condition, "/Tablas/"),
+                             pattern = paste0(condition, ".txt"))
+    
+    # We make a list of taxones of each contrast in the given condition
+    list_Venn <- list()
+    for (count in countFiles){
+        # count <- "DF-OBvsHe-FDR_0.05.txt"
+        name <- sub(paste0("-", condition, ".txt"), "", count)
+        data <- read.table(paste0(DFun.P, condition, "/Tablas/", count), 
+                           header = TRUE, sep = "\t", quote = "", 
+                           row.names = 1, comment.char = "")
+        list_Venn[[name]] <- data
+    }
+    
+    # We analyze the various possible combinations of 2 element
+    for (i in 1:nrow(comb.contrats)){
+        # i <- 3
+        repA <- comb.contrats[i,][1]
+        repB <- comb.contrats[i,][2]
+        
+        for (ud in c("", "up.", "down.")){
+            # ud <- ""
+            vennlist <- list(repA = rownames(list_Venn[[paste0(ud, "DF-", repA)]]),
+                             repB = rownames(list_Venn[[paste0(ud, "DF-", repB)]]))
+            
+            names(vennlist) <- c(paste0(ud, repA), paste0(ud, repB))
+            
+            if (length(vennlist[[1]]) != 0 && length(vennlist[[2]]) != 0){
+                # Venn object
+                ventemp <- venn(vennlist, show.plot = FALSE)
+                ventemp <- attributes(ventemp)$intersections
+                ventemp <- t(do.call(rbind, ventemp))
+                
+                # Verifies whether or not intersection exists
+                if (sum(table(unique(ventemp[,3]))) > 0 && dim(ventemp)[2] == 3){
+                    tryCatch({
+                        # Graphs
+                        venn.diagram(x = vennlist, 
+                                     # Names
+                                     category.names = names(vennlist), 
+                                     main = "Venn Diagram", main.cex = 20,
+                                     main.fontfamily = "sans",
+                                     sub = paste0(ud, repA, " vs ", ud, repB), 
+                                     sub.cex = 15, sub.fontfamily = "sans",
+                                     # Output
+                                     filename = paste0(VennPlot, ud, "DF_", 
+                                                       repA, "-vs-", repB, ".svg"), 
+                                     output = FALSE, 
+                                     # Output features
+                                     imagetype = "svg", height = 100, 
+                                     width = 100, resolution = 300,
+                                     # Circles
+                                     lwd = 15, 
+                                     col = c("#440154ff", "#21908dff"),
+                                     fill = c(alpha("#440154ff",0.3),
+                                              alpha("#21908dff",0.3)),
+                                     # Numbers
+                                     cex = 15, fontfamily = "sans",
+                                     # Set names
+                                     cat.pos = c(315, 45), 
+                                     cat.dist = c(0.05, 0.05), 
+                                     cat.cex = 15, 
+                                     cat.default.pos = "outer", 
+                                     cat.fontfamily = "sans")
+                      
+                        # Save table with all
+                        write.table(ventemp, file = paste0(VennList, "ListVenn-", 
+                                                           ud, "DF_", repA, "-vs-", 
+                                                           repB, ".txt"),
+                                    row.names = FALSE, quote = FALSE, 
+                                    sep = "\t", col.names = TRUE)
+                        
+                        # Cycle to save tables
+                        for (col in 1:length(colnames(ventemp))) {
+                            # Crea el dataframe
+                            # col <- 1
+                            df <- data.frame(unique(ventemp[, col]))
+                            names(df) <- colnames(ventemp)[col]
+                            names(df) <- gsub(":", "&", names(df))
+                            # Guarda el dataframe
+                            write.table(df, file = paste0(VennList, "ListVenn-", 
+                                                          ud, "DF_", repA, "-vs-", 
+                                                          repB, "_only_", 
+                                                          names(df), ".txt"),
+                                        row.names = FALSE, quote = FALSE, 
+                                        sep = "\t", col.names = TRUE)
+                        }
+                    }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+                }
+            }
+        }
+    }
+    
+    # Venn of 3 contrast join
+    for (ud in c("", "up.", "down.")){
+        # ud <- "up."
+        x <- contrasts[1]
+        y <- contrasts[2]
+        z <- contrasts[3]
+        
+        vennlist <- list(x = rownames(list_Venn[[paste0(ud, "DF-", x)]]),
+                         y = rownames(list_Venn[[paste0(ud, "DF-", y)]]),
+                         z = rownames(list_Venn[[paste0(ud, "DF-", z)]]))
+        
+        names(vennlist) <- c(paste0(ud, x), paste0(ud, y), paste0(ud, z))
+        
+        if (length(vennlist[[1]]) != 0 && length(vennlist[[2]]) != 0 && length(vennlist[[3]]) != 0 ){
+            ventemp <- venn(vennlist, show.plot = FALSE)
+            ventemp <- attributes(ventemp)$intersections
+            ventemp <- t(do.call(rbind, ventemp))
+            
+            if (sum(table(unique(ventemp[,7]))) > 0 && dim(ventemp)[2] == 7){
+                tryCatch({
+                    venn.diagram(x = vennlist, 
+                                 # Names
+                                 category.names = names(vennlist), 
+                                 main = "Venn Diagram", main.cex = 20, 
+                                 sub = paste0(ud, x, " vs ", ud, y, " vs ", ud, z), 
+                                 sub.cex = 15, main.fontfamily = "sans", 
+                                 sub.fontfamily = "sans",
+                                 # Output
+                                 filename = paste0(VennPlot, ud, "DF_", x, 
+                                                   "-vs-", y, "-vs-", z, ".svg"), 
+                                 output = FALSE, 
+                                 # Output features
+                                 imagetype = "svg", height = 100, 
+                                 width = 100, resolution = 300,
+                                 # Circles
+                                 lwd = 15, 
+                                 col = c("#440154ff", "#21908dff", "#fde725ff"),
+                                 fill = c(alpha("#440154ff",0.3), 
+                                          alpha("#21908dff",0.3), 
+                                          alpha("#fde725ff",0.3)),
+                                 # Numbers
+                                 cex = 15, fontfamily = "sans",
+                                 # Set names
+                                 cat.pos = c(-27, 27, 135), 
+                                 cat.dist = c(0.05, 0.05, 0.05), 
+                                 cat.cex = 15, 
+                                 cat.default.pos = "outer", 
+                                 cat.fontfamily = "sans")
+                  
+                    # Save table with all
+                    write.table(ventemp, file = paste0(VennList, "ListVenn-",
+                                                       ud, "DF_", x, "-vs-", y, 
+                                                       "-vs-", z, ".txt"),
+                                row.names = FALSE, quote = FALSE, 
+                                sep = "\t", col.names = TRUE)
+                    
+                    # Cycle to save tables
+                    for (col in 1:length(colnames(ventemp))) {
+                        # Crea el dataframe
+                        df <- data.frame(unique(ventemp[, col]))
+                        names(df) <- colnames(ventemp)[col]
+                        names(df) <- gsub(":", "&", names(df))
+                        # Guarda el dataframe
+                        write.table(df, file = paste0(VennList, "ListVenn-", 
+                                                      ud, "DF_", x, "-vs-", 
+                                                      y, "-vs-", z, "_only_", 
+                                                      names(df), ".txt"),
+                                    row.names = FALSE, quote = FALSE, 
+                                    sep = "\t", col.names = TRUE)
+                    }
+                }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+            }
+        }
+    }
+}
+```

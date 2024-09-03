@@ -1,0 +1,57 @@
+---
+title: "CAMDA2024 - Microbiom"
+subtitle: "001_Directories"
+author: "David Alberto García Estrada"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Directories
+
+## Main Working Directory 
+
+We adjust the working area
+
+```{r}
+# Display current directory
+getwd()
+# If necessary, change the path where the stored files are located. 
+workingDir <- "."
+setwd(workingDir)
+```
+
+## Other directories
+
+Data and Results
+
+```{r}
+Data <- "Data/"
+dir.create(Data, showWarnings = FALSE)
+Results <- "Results/"
+dir.create(Results, showWarnings = FALSE)
+
+TypeData <- c("Gut", "Covid", "Kraken", "Braken")
+SubResults <- c("Abundance", "Diversity", 
+                "DifferentialTaxa", "DifferentialFunction", 
+                "VennDiagramTaxa", "VennDiagramFunction")
+
+for (data in TypeData){
+  # Data
+  D.dir <- paste0(Data, data, "/")
+  dir.create(D.dir, showWarnings = FALSE)
+  # Results
+  R.dir <- paste0(Results, data, "/")
+  dir.create(R.dir, showWarnings = FALSE)
+  
+  # SubResults
+  for (subres in SubResults){
+    SR.dir <- paste0(R.dir, subres, "/")
+    dir.create(SR.dir, showWarnings = FALSE)
+  }
+  
+}
+```
