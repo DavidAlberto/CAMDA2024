@@ -52,6 +52,5 @@ for (data in TypeData){
     SR.dir <- paste0(R.dir, subres, "/")
     dir.create(SR.dir, showWarnings = FALSE)
   }
-  
 }
 ```
